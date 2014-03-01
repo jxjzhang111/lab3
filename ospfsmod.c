@@ -31,6 +31,8 @@
  * and KERN_EMERG will make sure that you will see messages.) */
 #define eprintk(format, ...) printk(KERN_NOTICE format, ## __VA_ARGS__)
 
+#define DEBUG 1
+
 // The actual disk data is just an array of raw memory.
 // The initial array is defined in fsimg.c, based on your 'base' directory.
 extern uint8_t ospfs_data[];
@@ -418,7 +420,7 @@ ospfs_dir_lookup(struct inode *dir, struct dentry *dentry, struct nameidata *ign
 //   Returns: 1 at end of directory, 0 if filldir returns < 0 before the end
 //     of the directory, and -(error number) on error.
 //
-//   EXERCISE: Finish implementing this function.
+//   DONE: Finish implementing this function.
 
 static int
 ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
@@ -428,6 +430,8 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	uint32_t f_pos = filp->f_pos;
 	int r = 0;		/* Error return value, if any */
 	int ok_so_far = 0;	/* Return value from 'filldir' */
+
+	if(DEBUG) eprintk("Start READ_DIR.\n");
 
 	// f_pos is an offset into the directory's data, plus two.
 	// The "plus two" is to account for "." and "..".
@@ -445,16 +449,16 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 
 	// actual entries
 	while (r == 0 && ok_so_far >= 0 && f_pos >= 2) {
-		ospfs_direntry_t *od;
-		ospfs_inode_t *entry_oi;
-
 		/* If at the end of the directory, set 'r' to 1 and exit
 		 * the loop.  For now we do this all the time.
 		 *
-		 * EXERCISE: Your code here */
-		r = 1;		/* Fix me! */
-		break;		/* Fix me! */
-
+		 * DONE: Your code here */
+		if(DEBUG) eprintk("READ_DIR: %d/%d ", f_pos, dir_oi->oi_size / OSPFS_DIRENTRY_SIZE);
+		if(f_pos > dir_oi->oi_size / OSPFS_DIRENTRY_SIZE) {
+			if(DEBUG) eprintk("Done READ_DIR.\n");
+			r = 1;
+			break;
+		}
 		/* Get a pointer to the next entry (od) in the directory.
 		 * The file system interprets the contents of a
 		 * directory-file as a sequence of ospfs_direntry structures.
@@ -475,9 +479,36 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * advance to the next directory entry.
 		 */
 
-		/* EXERCISE: Your code here */
-	}
+		/* DONE: Your code here */
+		ospfs_direntry_t *od;
+		ospfs_inode_t *entry_oi;
 
+		do {
+			od = ospfs_inode_data(dir_oi, (f_pos-2) * OSPFS_DIRENTRY_SIZE);
+			entry_oi = ospfs_inode(od->od_ino);
+			f_pos++;
+		} while(od->od_ino == 0 && f_pos < dir_oi->oi_size / OSPFS_DIRENTRY_SIZE);
+
+		if(od->od_ino == 0) {
+			f_pos++;
+			break;
+		}
+		if(DEBUG) eprintk("%s\n", od->od_name);
+
+		if(entry_oi->oi_ftype == OSPFS_FTYPE_DIR)
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
+		else if(entry_oi->oi_ftype == OSPFS_FTYPE_REG)
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_REG);
+		else if(entry_oi->oi_ftype == OSPFS_FTYPE_SYMLINK)
+			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_LNK);
+		
+		if (ok_so_far < 0){
+			if(DEBUG) eprintk("filldir error.\n");
+			r = 0;
+			break;
+		}
+	}
+	if(DEBUG) eprintk("Done READ_DIR.\n");
 	// Save the file position and return!
 	filp->f_pos = f_pos;
 	return r;
@@ -833,7 +864,7 @@ ospfs_notify_change(struct dentry *dentry, struct iattr *attr)
 //   as 'f_pos'; read data starting at that position, and update the position
 //   when you're done.
 //
-//   EXERCISE: Complete this function.
+//   DONE: Complete this function.
 
 static ssize_t
 ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
@@ -844,7 +875,16 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 
 	// Make sure we don't read past the end of the file!
 	// Change 'count' so we never read past the end of the file.
-	/* EXERCISE: Your code here */
+	/* DONE: Your code here */
+	if (*f_pos + count < *f_pos) { //overflow detection
+		return -EIO;
+	}
+	
+	if (*f_pos >= oi->oi_size) {
+		count = 0;
+	} else if (*f_pos + count > oi->oi_size) {//cannot read pass the file
+		count = oi->oi_size - *f_pos;
+	}
 
 	// Copy the data to user block by block
 	while (amount < count && retval >= 0) {
@@ -864,9 +904,22 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 		// Copy data into user space. Return -EFAULT if unable to write
 		// into user space.
 		// Use variable 'n' to track number of bytes moved.
-		/* EXERCISE: Your code here */
-		retval = -EIO; // Replace these lines
-		goto done;
+		/* DONE: Your code here */
+		uint32_t data_offset = *f_pos % OSPFS_BLKSIZE; // Data offset from the start of the block
+		uint32_t bytes_left_to_copy = count - amount;
+
+		n = OSPFS_BLKSIZE - data_offset;
+
+		// Copy bytes either until we hit the end
+		// of the block or satisfy the user
+		if (n > bytes_left_to_copy) {
+			n = bytes_left_to_copy;
+		}
+
+		// Copy_to_user return the number of bytes that could not be copied. On success, this will be 0
+		if (copy_to_user(buffer, data + data_offset, n) > 0) {//copy to buffer
+			return -EFAULT;
+		}
 
 		buffer += n;
 		amount += n;
@@ -904,11 +957,13 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 
 	// Support files opened with the O_APPEND flag.  To detect O_APPEND,
 	// use struct file's f_flags field and the O_APPEND bit.
-	/* EXERCISE: Your code here */
+	/* DONE: Your code here */
+	int append_mode = filp->f_flags & O_APPEND;
 
 	// If the user is writing past the end of the file, change the file's
 	// size to accomodate the request.  (Use change_size().)
 	/* EXERCISE: Your code here */
+
 
 	// Copy data block by block
 	while (amount < count && retval >= 0) {
@@ -1000,15 +1055,40 @@ find_direntry(ospfs_inode_t *dir_oi, const char *name, int namelen)
 static ospfs_direntry_t *
 create_blank_direntry(ospfs_inode_t *dir_oi)
 {
+	/* DONE: Your code here. */
 	// Outline:
 	// 1. Check the existing directory data for an empty entry.  Return one
 	//    if you find it.
+	uint32_t new_size;
+	ospfs_direntry_t *od;
+	int retval = 0, offset;
+
+	if (dir_oi->oi_ftype != OSPFS_FTYPE_DIR) {
+		return ERR_PTR(-EIO);
+	}
+
+	for (offset = 0; offset < dir_oi->oi_size; offset += OSPFS_DIRENTRY_SIZE) {
+		od = ospfs_inode_data(dir_oi, offset);
+		//See the header ospfs_direntry. It says that:
+		//If the inode number is 0, then the directory entry is EMPTY
+		if (od->od_ino == 0) {
+			return od;
+		}
+	}
+
 	// 2. If there's no empty entries, add a block to the directory.
 	//    Use ERR_PTR if this fails; otherwise, clear out all the directory
 	//    entries and return one of them.
+	new_size = (ospfs_size2nblocks(dir_oi->oi_size) + 1) * OSPFS_BLKSIZE;
+	retval = change_size(dir_oi, new_size);
 
-	/* EXERCISE: Your code here. */
-	return ERR_PTR(-EINVAL); // Replace this line
+	if(retval != 0) { //change_size returns 0 on success
+		return ERR_PTR(retval);
+	}
+
+	dir_oi->oi_size = new_size;
+
+	return ospfs_inode_data(dir_oi, offset);
 }
 
 // ospfs_link(src_dentry, dir, dst_dentry

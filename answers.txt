@@ -9,13 +9,13 @@
 # If you have any other information you'd like us to know, please add it at the end of the file.
 
 # Partner 1
-Name: 
-Student ID: 
-Email: 
+Name: Jennifer Zhang
+Student ID: 504356174
+Email: jxjzhang@cs.ucla.edu
 
-# Partner 2 (if you're working in a team)
-Name: 
-Student ID: 
-Email: 
+# Partner 2
+#Name: Yi-An Lai
+#Student ID: 304271741
+#Email: lai61616@ucla.edu
 
 # Add any other information you'd like us to know below this line.
