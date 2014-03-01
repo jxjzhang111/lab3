@@ -582,7 +582,7 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 /*****************************************************************************
  * FREE-BLOCK BITMAP OPERATIONS
  *
- * EXERCISE: Implement these functions.
+ * DONE: Implement these functions.
  */
 
 // allocate_block()
@@ -605,7 +605,15 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 static uint32_t
 allocate_block(void)
 {
-	/* EXERCISE: Your code here */
+	/* DONE: Your code here */
+	int i;
+	int offset = OSPFS_BLKSIZE * 2;
+	for(i=2; i<OSPFS_BLKBITSIZE * 2; i++){
+		if(bitvector_test(&ospfs_data[offset], i)){
+			bitvector_clear(&ospfs_data[offset], i);
+			return i;
+		}
+	}
 	return 0;
 }
 
@@ -624,7 +632,12 @@ allocate_block(void)
 static void
 free_block(uint32_t blockno)
 {
-	/* EXERCISE: Your code here */
+	/* DONE: Your code here */
+	int offset = OSPFS_BLKSIZE * 2;
+	int inode_blocks = ospfs_super->os_ninodes / (OSPFS_BLKSIZE/OSPFS_INODESIZE);
+	// never free the boot sector, superblock, free-block bitmap, and inode blocks
+	if(blockno > inode_blocks + 3 && blockno < OSPFS_BLKBITSIZE * 2)
+		bitvector_set(&ospfs_data[offset], blockno);
 }
 
 
