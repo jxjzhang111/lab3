@@ -218,6 +218,28 @@ ospfs_inode_data(ospfs_inode_t *oi, uint32_t offset)
 	return (uint8_t *) ospfs_block(blockno) + (offset % OSPFS_BLKSIZE);
 }
 
+// find free inode
+static inline uint32_t
+find_free_inode(void)
+{
+	uint32_t inode_no;
+	ospfs_inode_t *new_inode_loc;
+
+	// Determine what inode we can use
+	// Start at 2 since the first two inodes are special
+	// Inode number 1 is the inode for the root directory of the file system.
+	// Inode number 0 is reserved and must never be used. 
+	for (inode_no = 2; inode_no < ospfs_super->os_ninodes; inode_no++) {
+		new_inode_loc = ospfs_inode(inode_no); //load inode structure corresponding to inode number from disk
+
+		if (new_inode_loc->oi_nlink == 0) //inode is free if link count reaches 0 => no hard links
+			return inode_no;
+	}
+
+	// If we've gotten this far, there are no free inodes to use
+	return 0;
+}
+
 
 /*****************************************************************************
  * LOW-LEVEL FILE SYSTEM FUNCTIONS
@@ -1050,7 +1072,7 @@ find_direntry(ospfs_inode_t *dir_oi, const char *name, int namelen)
 //
 //	The create_blank_direntry function should use this convention.
 //
-// EXERCISE: Write this function.
+// DONE: Write this function.
 
 static ospfs_direntry_t *
 create_blank_direntry(ospfs_inode_t *dir_oi)
@@ -1118,12 +1140,48 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 //               -ENOSPC       if the disk is full & the file can't be created;
 //               -EIO          on I/O error.
 //
-//   EXERCISE: Complete this function.
+//   DONE: Complete this function.
 
 static int
 ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dentry) {
-	/* EXERCISE: Your code here. */
-	return -EINVAL;
+	/* DONE: Your code here. */
+	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
+	ospfs_inode_t *src_oi = ospfs_inode(src_dentry->d_inode->i_ino);
+	ospfs_direntry_t *new_entry;
+
+	// Error handling
+	if (dir_oi == NULL || dir_oi->oi_ftype != OSPFS_FTYPE_DIR || src_oi->oi_nlink + 1 == 0) {
+		return -EIO;
+	}
+
+	if (dst_dentry->d_name.len > OSPFS_MAXNAMELEN) {
+		return -ENAMETOOLONG;
+	}
+
+	if (find_direntry(dir_oi, dst_dentry->d_name.name, dst_dentry->d_name.len) != NULL) {
+		return -EEXIST;
+	}
+
+	new_entry = create_blank_direntry(dir_oi);
+
+	// Error handling
+	if (IS_ERR(new_entry)) {
+		return PTR_ERR(new_entry);
+	}
+
+	if (new_entry == NULL) {
+		return -EIO;
+	}
+
+	// Initialize the new directory entry
+	new_entry->od_ino = src_dentry->d_inode->i_ino;
+	memcpy(new_entry->od_name, dst_dentry->d_name.name, dst_dentry->d_name.len);
+	new_entry->od_name[dst_dentry->d_name.len] = '\0';
+
+	// Increase the link count on the source file.
+	src_oi->oi_nlink++;
+
+	return 0;
 }
 
 // ospfs_create
@@ -1153,26 +1211,66 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 //   2. Find an empty inode.  Set the 'entry_ino' variable to its inode number.
 //   3. Initialize the directory entry and inode.
 //
-//   EXERCISE: Complete this function.
+//   DONE: Complete this function.
 
 static int
 ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidata *nd)
 {
 	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
 	uint32_t entry_ino = 0;
-	/* EXERCISE: Your code here. */
-	return -EINVAL; // Replace this line
+	/* DONE: Your code here. */
+	ospfs_inode_t *file_oi = NULL;
+	ospfs_direntry_t *new_entry = NULL;
+	uint32_t block_no = 0;
+
+	// 1. Check for the -EEXIST error and find an empty directory entry using the
+	// helper functions above.
+	if (dir_oi->oi_ftype != OSPFS_FTYPE_DIR) { //check if file type is directory
+		return -EIO;
+	}
+
+	if (dentry->d_name.len > OSPFS_MAXNAMELEN) { //check if the name is too large
+		return -ENAMETOOLONG;
+	}
+
+	if (find_direntry(dir_oi, dentry->d_name.name, dentry->d_name.len) != NULL) { //check if file name already exists
+		return -EEXIST;
+	}
+
+	// 2. Find an empty inode.  Set the 'entry_ino' variable to its inode number.
+	entry_ino = find_free_inode();
+	if(entry_ino == 0) {
+		return -ENOSPC;
+	}
+
+	file_oi = ospfs_inode(entry_ino); 
+	if (file_oi == NULL) {
+		return -EIO;
+	}
+
+	// 3. Initialize the directory entry and inode.
+	file_oi->oi_size = 0; //File size
+	file_oi->oi_ftype = OSPFS_FTYPE_REG;
+	file_oi->oi_nlink = 1; //Number of hard links
+	file_oi->oi_mode = mode; //File permission mode
+
+	new_entry = create_blank_direntry(dir_oi);
+	if(IS_ERR(new_entry)) {
+		return PTR_ERR(new_entry);
+	}
+
+	new_entry->od_ino = entry_ino;
+	memcpy(new_entry->od_name, dentry->d_name.name, dentry->d_name.len);
+	new_entry->od_name[dentry->d_name.len] = '\0';
 
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
-	{
-		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
-		if (!i)
-			return -ENOMEM;
-		d_instantiate(dentry, i);
-		return 0;
-	}
+	struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
+	if (!i)
+		return -ENOMEM;
+	d_instantiate(dentry, i);
+	return 0;
 }
 
 
