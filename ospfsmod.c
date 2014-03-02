@@ -352,7 +352,7 @@ ospfs_delete_dentry(struct dentry *dentry)
 /*****************************************************************************
  * DIRECTORY OPERATIONS
  *
- * EXERCISE: Finish 'ospfs_dir_readdir' and 'ospfs_symlink'.
+ * DONE: Finish 'ospfs_dir_readdir' and 'ospfs_symlink'.
  */
 
 // ospfs_dir_lookup(dir, dentry, ignore)
@@ -516,13 +516,17 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 			break;
 		}
 		if(DEBUG) eprintk("%s\n", od->od_name);
+		
+		uint32_t type;
 
 		if(entry_oi->oi_ftype == OSPFS_FTYPE_DIR)
-			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_DIR);
+			type = DT_DIR;
 		else if(entry_oi->oi_ftype == OSPFS_FTYPE_REG)
-			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_REG);
+			type = DT_REG;
 		else if(entry_oi->oi_ftype == OSPFS_FTYPE_SYMLINK)
-			ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, DT_LNK);
+			type = DT_LNK;
+
+		ok_so_far = filldir(dirent, od->od_name, strlen(od->od_name), f_pos, od->od_ino, type);
 		
 		if (ok_so_far < 0){
 			if(DEBUG) eprintk("filldir error.\n");
@@ -574,6 +578,11 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 
 	od->od_ino = 0;
 	oi->oi_nlink--;
+
+	// clean up if link count is zero
+	if (oi->oi_nlink == 0 && oi->oi_ftype != OSPFS_FTYPE_SYMLINK)
+		change_size(oi, 0);
+
 	return 0;
 }
 
@@ -644,7 +653,7 @@ free_block(uint32_t blockno)
 /*****************************************************************************
  * FILE OPERATIONS
  *
- * EXERCISE: Finish off change_size, read, and write.
+ * DONE: Finish off change_size, read, and write.
  *
  * The find_*, add_block, and remove_block functions are only there to support
  * the change_size function.  If you prefer to code change_size a different
@@ -1133,7 +1142,7 @@ ospfs_read(struct file *filp, char __user *buffer, size_t count, loff_t *f_pos)
 //   where you cannot read past the end of the file, it is OK to write past
 //   the end of the file; this should simply change the file's size.
 //
-//   EXERCISE: Complete this function.
+//   DONE: Complete this function.
 
 static ssize_t
 ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *f_pos)
@@ -1145,13 +1154,16 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 	// Support files opened with the O_APPEND flag.  To detect O_APPEND,
 	// use struct file's f_flags field and the O_APPEND bit.
 	/* DONE: Your code here */
-	int append_mode = filp->f_flags & O_APPEND;
+	if(filp->f_flags & O_APPEND) {
+		*f_pos = oi->oi_size;
+	}
 
 	// If the user is writing past the end of the file, change the file's
 	// size to accomodate the request.  (Use change_size().)
 	/* DONE: Your code here */
-	if(ospfs_size2nblocks(oi->oi_size + count) > ospfs_size2nblocks(oi->oi_size)) {
-		retval = change_size(oi, oi->oi_size + count);
+
+	if (*f_pos + count > oi->oi_size) {
+		retval = change_size(oi, *f_pos + count);
 
 		if(retval < 0)
 			goto done;
@@ -1180,6 +1192,9 @@ ospfs_write(struct file *filp, const char __user *buffer, size_t count, loff_t *
 
 		n = OSPFS_BLKSIZE - data_offset;
 
+		if (n > bytes_left_to_copy) {
+			n = bytes_left_to_copy;
+		}
 		
 		// Copy_to_user return the number of bytes that could not be copied. On success, this will be 0
 		if (copy_from_user(data + data_offset, buffer, n) > 0) { //copy to buffer
@@ -1481,6 +1496,9 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	uint32_t entry_ino = 0;
 
 	/* DONE: Your code here. */
+	if(DEBUG) {
+		eprintk("CREATE_SYMLINK: %s\n", symname);
+	}
 	ospfs_symlink_inode_t *file_oi = NULL;
 	ospfs_direntry_t *new_entry = NULL;
 	uint32_t block_no = 0;
@@ -1512,7 +1530,7 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	}
 
 	// 3. Initialize the directory entry and inode.
-	file_oi->oi_size = dentry->d_name.len; //File size
+	file_oi->oi_size = strlen(symname); //File size
 	file_oi->oi_ftype = OSPFS_FTYPE_SYMLINK;
 	file_oi->oi_nlink = 1; //Number of hard links
 	memcpy(file_oi->oi_symlink, symname, strlen(symname));
@@ -1527,6 +1545,9 @@ ospfs_symlink(struct inode *dir, struct dentry *dentry, const char *symname)
 	memcpy(new_entry->od_name, dentry->d_name.name, dentry->d_name.len);
 	new_entry->od_name[dentry->d_name.len] = '\0';
 
+	if(DEBUG) {
+		eprintk("DONE CREATE_SYMLINK.\n");
+	}
 	/* Execute this code after your function has successfully created the
 	   file.  Set entry_ino to the created file's inode number before
 	   getting here. */
@@ -1558,10 +1579,28 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 {
 	ospfs_symlink_inode_t *oi =
 		(ospfs_symlink_inode_t *) ospfs_inode(dentry->d_inode->i_ino);
-	// Exercise: Your code here.
 
-	
-	nd_set_link(nd, oi->oi_symlink);
+	// Exercise: Your code here.
+	char tmp[oi->oi_size + 1];
+	strncpy(tmp, oi->oi_symlink, oi->oi_size);
+	tmp[oi->oi_size] = '\0';
+
+	char* qmark = strpbrk(oi->oi_symlink, "?");
+  	char* colon = strpbrk(oi->oi_symlink, ":");
+
+  	if(qmark && colon && colon > qmark) {  // conditional symlink
+  		if (current->uid == 0) { // root
+  			char path[colon - qmark];
+  			strncpy(path, colon + 1, colon - qmark -1);
+  			path[colon - qmark - 1] = '\0';
+			nd_set_link(nd, path);
+		}
+		else {
+			nd_set_link(nd, colon + 1);
+		}
+  	}
+  	else // normal symlink
+		nd_set_link(nd, oi->oi_symlink);
 	return (void *) 0;
 }
 
