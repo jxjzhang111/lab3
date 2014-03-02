@@ -773,6 +773,9 @@ add_block(ospfs_inode_t *oi)
 	uint32_t allocated[2] = { 0, 0 };
 
 	/* DONE: Your code here */
+	if(n >= OSPFS_MAXFILEBLKS) 
+		return -EIO;
+
 	if(indir2_index(n) == 0) {  // using double indirect ptr
 		allocated[0] = allocate_block();
 		if(allocated[0] == 0)
@@ -936,7 +939,7 @@ remove_block(ospfs_inode_t *oi)
 
 	// update the oi->oi_size field
 	oi->oi_size -= OSPFS_BLKSIZE;
-	return 0; // Replace this line
+	return 0;
 }
 
 
