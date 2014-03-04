@@ -1598,23 +1598,26 @@ ospfs_follow_link(struct dentry *dentry, struct nameidata *nd)
 		(ospfs_symlink_inode_t *) ospfs_inode(dentry->d_inode->i_ino);
 
 	// Exercise: Your code here.
-	char* qmark;
-	char* colon;
-	char tmp[oi->oi_size + 1];
-	strncpy(tmp, oi->oi_symlink, oi->oi_size);
-	tmp[oi->oi_size] = '\0';
-
-	qmark = strpbrk(oi->oi_symlink, "?");
-  	colon = strpbrk(oi->oi_symlink, ":");
-
-  	if(qmark && colon && colon > qmark) {  // conditional symlink
+	char* qmark = strpbrk(oi->oi_symlink, "?");
+  	char* colon = strpbrk(oi->oi_symlink, ":");
+ 	
+	if(qmark && colon && colon > qmark) {  // raw conditional symlink
+		int c_pos = colon - oi->oi_symlink; // colon position
+		oi->oi_symlink[c_pos] = 0; // subdivide
+	}
+	
+  	if(qmark) {  // conditional symlink
+		colon = oi->oi_symlink + strlen(oi->oi_symlink);
   		if (current->uid == 0) { // root
-  			char path[colon - qmark];
-  			strncpy(path, colon + 1, colon - qmark -1);
-  			path[colon - qmark - 1] = '\0';
-			nd_set_link(nd, path);
+#if DEBUG
+			eprintk("CHECK root SYMLINK: %s\n", qmark + 1);
+#endif
+			nd_set_link(nd, qmark + 1);
 		}
 		else {
+#if DEBUG
+			eprintk("CHECK user SYMLINK: %s\n", colon + 1);
+#endif
 			nd_set_link(nd, colon + 1);
 		}
   	}
